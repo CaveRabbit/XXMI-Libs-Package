@@ -652,7 +652,7 @@ void Overlay::DrawShaderInfoLine(char *type, UINT64 selectedShader, float *y, bo
 
 	textPosition = Vector2(x, *y);
 	*y += strSize.y;
-	DrawOutlinedString(mFont.get(), osdString, textPosition, DirectX::Colors::LimeGreen);
+	DrawOutlinedString(mFont.get(), osdString, textPosition, DirectX::Colors::CornflowerBlue);
 }
 
 void Overlay::DrawShaderInfoLines(float *y)
@@ -775,7 +775,7 @@ void Overlay::DrawOverlay(void)
 				CreateShaderCountString(osdString);
 				strSize = mFont->MeasureString(osdString);
 				textPosition = Vector2(float(mResolution.x - strSize.x) / 2, y);
-				DrawOutlinedString(mFont.get(), osdString, textPosition, DirectX::Colors::LimeGreen);
+				DrawOutlinedString(mFont.get(), osdString, textPosition, DirectX::Colors::CornflowerBlue);
 				y += strSize.y;
 
 				DrawShaderInfoLines(&y);
@@ -784,7 +784,7 @@ void Overlay::DrawOverlay(void)
 				CreateInfoString(osdString);
 				strSize = mFont->MeasureString(osdString);
 				textPosition = Vector2(float(mResolution.x - strSize.x) / 2, float(mResolution.y - strSize.y - 10));
-				DrawOutlinedString(mFont.get(), osdString, textPosition, DirectX::Colors::LimeGreen);
+				DrawOutlinedString(mFont.get(), osdString, textPosition, DirectX::Colors::CornflowerBlue);
 			}
 
 			if (has_notice)

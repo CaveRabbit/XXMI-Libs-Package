@@ -2272,7 +2272,16 @@ void FrameAnalysisContext::link_deduplicated_files(const wchar_t *filename, cons
 
 	if (analyse_options & FrameAnalysisOptions::SYMLINK) {
 		if (PathRelativePathTo(relative_path, filename, 0, dedupe_filename, 0)) {
-			if (CreateSymbolicLink(filename, relative_path, SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE))
+			if (analyse_options & FrameAnalysisOptions::USE_HARDLINK) {
+				if (CreateHardLink(filename, dedupe_filename, NULL))
+					return;
+				if (GetLastError() == ERROR_TOO_MANY_LINKS) {
+					rotate_deduped_file(dedupe_filename);
+					if (CreateHardLink(filename, dedupe_filename, NULL))
+						return;
+				}
+			}
+			else if (CreateSymbolicLink(filename, relative_path, SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE))
 				return;
 		}
 
