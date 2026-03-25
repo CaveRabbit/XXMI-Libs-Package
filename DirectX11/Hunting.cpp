@@ -1401,7 +1401,6 @@ static void NextVertexBuffer(HackerDevice *device, void *private_data)
 	EnterCriticalSectionPretty(&G->mCriticalSection);
 	G->mSelectedVertexBuffer_PixelShader.clear();
 	G->mSelectedVertexBuffer_VertexShader.clear();
-	G->gVisitedVertexBufferSlotIds.clear();
 	LeaveCriticalSection(&G->mCriticalSection);
 }
 static void NextIndexBuffer(HackerDevice *device, void *private_data)
@@ -1411,27 +1410,6 @@ static void NextIndexBuffer(HackerDevice *device, void *private_data)
 	EnterCriticalSectionPretty(&G->mCriticalSection);
 	G->mSelectedIndexBuffer_PixelShader.clear();
 	G->mSelectedIndexBuffer_VertexShader.clear();
-	LeaveCriticalSection(&G->mCriticalSection);
-}
-static void NextVertexBufferSlot(HackerDevice* device, void* private_data)
-{
-	EnterCriticalSectionPretty(&G->mCriticalSection);
-
-	int32_t& id = G->gSelectedVertexBufferSlotId;
-	uint32_t count = D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT;
-
-	if (id < 0)
-		id = 0;
-	else if ((uint32_t)id >= count - 1)
-		id = -1;
-	else
-		id++;
-
-	G->mVisitedVertexBuffers.clear();
-	G->gVisitedVertexBufferSlotIds.clear();
-	G->mSelectedVertexBufferPos = -1;
-	G->gResetSelectedVertexBufferSlotId = true;
-
 	LeaveCriticalSection(&G->mCriticalSection);
 }
 static void NextPixelShader(HackerDevice *device, void *private_data)
@@ -1530,28 +1508,6 @@ static void PrevVertexBuffer(HackerDevice *device, void *private_data)
 	EnterCriticalSectionPretty(&G->mCriticalSection);
 	G->mSelectedVertexBuffer_PixelShader.clear();
 	G->mSelectedVertexBuffer_VertexShader.clear();
-	G->gVisitedVertexBufferSlotIds.clear();
-	LeaveCriticalSection(&G->mCriticalSection);
-}
-static void PrevVertexBufferSlot(HackerDevice* device, void* private_data)
-{
-	EnterCriticalSectionPretty(&G->mCriticalSection);
-
-	int32_t& id = G->gSelectedVertexBufferSlotId;
-	uint32_t count = D3D11_IA_VERTEX_INPUT_RESOURCE_SLOT_COUNT;
-
-	if (id < 0)
-		id = count - 1;
-	else if (id == 0)
-		id = -1;
-	else
-		id--;
-
-	G->mVisitedVertexBuffers.clear();
-	G->gVisitedVertexBufferSlotIds.clear();
-	G->mSelectedVertexBufferPos = -1;
-	G->gResetSelectedVertexBufferSlotId = true;
-
 	LeaveCriticalSection(&G->mCriticalSection);
 }
 static void PrevIndexBuffer(HackerDevice *device, void *private_data)
@@ -1910,7 +1866,6 @@ static void DoneHunting(HackerDevice *device, void *private_data)
 	G->mSelectedRenderTarget = ((ID3D11Resource *)-1);
 	G->mSelectedVertexBuffer = -1;
 	G->mSelectedVertexBufferPos = -1;
-	G->gSelectedVertexBufferSlotId = -1;
 	G->mSelectedIndexBuffer = -1;
 	G->mSelectedIndexBufferPos = -1;
 
@@ -2007,9 +1962,6 @@ void ParseHuntingSection()
 	RegisterIniKeyBinding(L"Hunting", L"previous_vertexbuffer", PrevVertexBuffer, NULL, repeat, NULL);
 	RegisterIniKeyBinding(L"Hunting", L"mark_vertexbuffer", MarkVertexBuffer, NULL, noRepeat, NULL);
 
-	RegisterIniKeyBinding(L"Hunting", L"next_vertexbuffer_slot", NextVertexBufferSlot, NULL, repeat, NULL);
-	RegisterIniKeyBinding(L"Hunting", L"previous_vertexbuffer_slot", PrevVertexBufferSlot, NULL, repeat, NULL);
-
 	RegisterIniKeyBinding(L"Hunting", L"next_indexbuffer", NextIndexBuffer, NULL, repeat, NULL);
 	RegisterIniKeyBinding(L"Hunting", L"previous_indexbuffer", PrevIndexBuffer, NULL, repeat, NULL);
 	RegisterIniKeyBinding(L"Hunting", L"mark_indexbuffer", MarkIndexBuffer, NULL, noRepeat, NULL);
@@ -2084,22 +2036,19 @@ void RegisterVisitedIndexBuffer(uint32_t hash)
 	LeaveCriticalSection(&G->mCriticalSection);
 }
 
-void RegisterVisitedVertexBufferNoLock(uint32_t hash, uint32_t slot_id)
+void RegisterVisitedVertexBufferNoLock(uint32_t hash)
 {
 	if (!hash)
 		return;
-	if (G->gSelectedVertexBufferSlotId != -1 && slot_id != G->gSelectedVertexBufferSlotId) {
-		return;
-	}
 	G->mVisitedVertexBuffers.insert(hash);
 	if (G->overlay_buffer_hash_lifetime >= 0)
 		G->mVisitedVertexBuffersLastSeenFrame[hash] = G->frame_no;
 }
 
-void RegisterVisitedVertexBuffer(uint32_t hash, uint32_t slot_id)
+void RegisterVisitedVertexBuffer(uint32_t hash)
 {
 	EnterCriticalSectionPretty(&G->mCriticalSection);
-	RegisterVisitedVertexBufferNoLock(hash, slot_id);
+	RegisterVisitedVertexBufferNoLock(hash);
 	LeaveCriticalSection(&G->mCriticalSection);
 }
 

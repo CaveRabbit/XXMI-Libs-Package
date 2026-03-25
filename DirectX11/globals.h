@@ -512,12 +512,6 @@ struct Globals
 
 	CRITICAL_SECTION mCriticalSection;
 
-	std::set<uint32_t> gVisitedVertexBufferSlotIds;
-	INT gSelectedVertexBufferSlotId;
-	bool gResetSelectedVertexBufferSlotId;
-	DrawCallInfo gSelectedIndexBufferDrawInfo;
-	DrawCallInfo gSelectedVertexBufferDrawInfo;
-
 	float mVisitedBuffersLastPurgeTime;
 	std::unordered_map<uint32_t, unsigned> mVisitedIndexBuffersLastSeenFrame;
 	std::unordered_map<uint32_t, unsigned> mVisitedVertexBuffersLastSeenFrame;
@@ -659,8 +653,6 @@ struct Globals
 		huntTime(0),
 		verbose_overlay(false),
 		suppress_overlay(false),
-		gSelectedVertexBufferSlotId(-1),
-		gResetSelectedVertexBufferSlotId(false),
 
 		deferred_contexts_enabled(true),
 
