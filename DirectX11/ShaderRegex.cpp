@@ -373,7 +373,7 @@ void ShaderRegexGroup::link_command_lists_and_filter_index(UINT64 shader_hash)
 	// because this will create ShaderOverride sections for shaders that
 	// don't already have one, adding more work in the draw calls.
 
-	if (command_list.commands.empty() && post_command_list.commands.empty() && filter_index == FLT_MAX)
+	if (command_list.noop() && post_command_list.noop() && filter_index == FLT_MAX)
 		return;
 
 	shader_override = &G->mShaderOverrideMap[shader_hash];
@@ -418,10 +418,10 @@ void ShaderRegexGroup::link_command_lists_and_filter_index(UINT64 shader_hash)
 	// RunLinkedCommandList command and link it up:
 	ini_line = L"[" + command_list.ini_section + L".Match] run = linked command list";
 
-	if (!command_list.commands.empty())
+	if (!command_list.noop())
 		link = LinkCommandLists(&shader_override->command_list, &command_list, &ini_line);
 
-	if (!post_command_list.commands.empty())
+	if (!post_command_list.noop())
 		post_link = LinkCommandLists(&shader_override->post_command_list, &post_command_list, &ini_line);
 }
 
@@ -718,7 +718,7 @@ bool get_shader_model_from_bytecode(const void* data, size_t size, std::string* 
 }
 
 // Process groups that do not have patches to apply. Those can be handled without disassembly.
-bool link_shader_regex_groups_without_patterns(const wchar_t* shader_type, std::string* shader_model, UINT64 hash, bool* decompilation_required)
+void link_shader_regex_groups_without_patterns(const wchar_t* shader_type, std::string* shader_model, UINT64 hash, bool* decompilation_required)
 {
 	ShaderRegexGroups::iterator i;
 	vector<uint32_t> match_ids;

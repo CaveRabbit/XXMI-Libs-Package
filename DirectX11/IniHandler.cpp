@@ -20,6 +20,7 @@
 
 #include "vector"
 #include <locale>
+#include <cmath>
 
 #define INI_FILENAME L"d3dx.ini"
 
@@ -61,6 +62,7 @@ static Section CommandListSections[] = {
 // list a section in both lists - put it above if it is a command list section,
 // and in this list if it is not:
 static Section RegularSections[] = {
+	{L"Pool", true},
 	{L"Resource", true},
 	{L"Key", true},
 	{L"Include", true}, // Prefix so that it may be namespaced to allow included files to include more files with relative paths
@@ -850,6 +852,21 @@ void GetIniSection(IniSectionVector **key_vals, const wchar_t *section)
 	return _GetIniSection(&ini_sections, key_vals, section);
 }
 
+const std::wstring& GetIniSectionNamespace(const wchar_t* section)
+{
+	auto it = ini_sections.find(section);
+
+	if (it != ini_sections.end() && !it->second.ini_namespace.empty())
+		return it->second.ini_namespace;
+
+	return G->gDefaultNamespace;
+}
+
+const std::wstring& GetIniNamespace(const wchar_t* section, const wstring* override)
+{
+	return override ? *override : GetIniSectionNamespace(section);
+}
+
 // This emulates the behaviour of the old GetPrivateProfileString API to
 // facilitate switching to our own ini parser. Later we might consider changing
 // the return values (e.g. return found/not found instead of string length),
@@ -975,6 +992,7 @@ int GetIniStringAndLog(const wchar_t *section, const wchar_t *key,
 
 	return rc;
 }
+
 static bool GetIniStringAndLog(const wchar_t *section, const wchar_t *key,
 		const wchar_t *def, std::string *ret)
 {
@@ -986,97 +1004,285 @@ static bool GetIniStringAndLog(const wchar_t *section, const wchar_t *key,
 	return rc;
 }
 
-
-float GetIniFloat(const wchar_t *section, const wchar_t *key, float def, bool *found)
+const wstring* GetIniWstring(const wchar_t* section, const wchar_t* key)
 {
-	wchar_t val[32];
-	float ret = def;
-	int len;
+	auto section_it = ini_sections.find(section);
+	if (section_it == ini_sections.end())
+		return nullptr;
 
-	if (found)
-		*found = false;
+	auto value_it = section_it->second.kv_map.find(key);
+	if (value_it == section_it->second.kv_map.end())
+		return nullptr;
 
-	if (GetIniString(section, key, 0, val, 32)) {
-		if (swscanf_s(val, L"%f%n", &ret, &len) != 1 || len != wcslen(val)) {
-			wstring ini_namespace = ini_sections[section].ini_namespace;
-			if (ini_namespace.empty()) {
-				ini_namespace = L"d3dx.ini";
-			}
-			IniWarningW(L"Floating point parse error: %ls=%ls\n - [%ls] @ [%ls]\n", key, val, section, ini_namespace.c_str());
-			ret = def;
-		} else {
-			if (found)
-				*found = true;
-			LogInfo("  %S=%f\n", key, ret);
-		}
-	}
-
-	return ret;
+	return &value_it->second;
 }
 
-int GetIniInt(const wchar_t *section, const wchar_t *key, int def, bool *found, bool warn)
+inline std::wstring NormalizeString(const std::wstring& value)
 {
-	wchar_t val[32];
-	int ret = def;
-	int len;
-
-	if (found)
-		*found = false;
-
-	// Not using GetPrivateProfileInt as it doesn't tell us if the key existed
-	if (GetIniString(section, key, 0, val, 32)) {
-		if (swscanf_s(val, L"%d%n", &ret, &len) != 1 || len != wcslen(val)) {
-			if (warn) {
-				wstring ini_namespace = ini_sections[section].ini_namespace;
-				if (ini_namespace.empty()) {
-					ini_namespace = L"d3dx.ini";
-				}
-				IniWarningW(L"Integer parse error: %ls=%ls\n - [%ls] @ [%ls]\n", key, val, section, ini_namespace.c_str());
-			}
-			ret = def;
-		} else {
-			if (found)
-				*found = true;
-			LogInfo("  %S=%d\n", key, ret);
-		}
-	}
-
-	return ret;
+	std::wstring normalized = value;
+	std::transform(normalized.begin(), normalized.end(), normalized.begin(), towlower);
+	return normalized;
 }
 
-bool GetIniBool(const wchar_t *section, const wchar_t *key, bool def, bool *found, bool warn)
+bool ParseBinaryLiterals(const wstring& input, size_t start, uint64_t& out, size_t& length)
 {
-	wchar_t val[32];
-	bool ret = def;
+	uint64_t value = 0;
+	length = 0;
 
-	if (found)
-		*found = false;
+	for (; start < input.size(); ++start, ++length)
+	{
+		const wchar_t c = input[start];
 
-	if (GetIniString(section, key, 0, val, 32)) {
-		if (!_wcsicmp(val, L"1") || !_wcsicmp(val, L"true") || !_wcsicmp(val, L"yes") || !_wcsicmp(val, L"on")) {
-			LogInfo("  %S=1\n", key);
-			if (found)
-				*found = true;
-			return true;
-		}
-		if (!_wcsicmp(val, L"0") || !_wcsicmp(val, L"false") || !_wcsicmp(val, L"no") || !_wcsicmp(val, L"off")) {
-			LogInfo("  %S=0\n", key);
-			if (found)
-				*found = true;
+		if (c != L'0' && c != L'1')
+			break;
+
+		// uint64_t can hold at most 64 binary digits.
+		if (length >= 64)
 			return false;
-		}
 
-		if (warn) {
-			wstring ini_namespace = ini_sections[section].ini_namespace;
-			if (ini_namespace.empty()) {
-				ini_namespace = L"d3dx.ini";
-			}
-			IniWarningW(L"Boolean parse error: %ls=%ls\n - [%ls] @ [%ls]\n", key, val, section, ini_namespace.c_str());
-			ret = def;
-		}
+		value <<= 1;
+
+		if (c == L'1')
+			value |= 1;
 	}
 
-	return ret;
+	if (length == 0)
+		return false;
+
+	out = value;
+	return true;
+}
+
+template<typename T, typename Converter>
+bool ParseIniExpression(
+	const wstring* ini_namespace_override,
+	const wchar_t* section,
+	const wchar_t* key,
+	const wstring& value,
+	T& out,
+	bool warn,
+	Converter&& convert,
+	bool normalize = true)
+{
+	const wstring& ini_namespace = GetIniNamespace(section, ini_namespace_override);
+
+	// Expression parsing is case-insensitive.
+	const wstring& expression_text = normalize ? NormalizeString(value) : value;
+
+	CommandListExpression expression;
+
+	if (!expression.parse(&expression_text, &ini_namespace, nullptr))
+	{
+		if (warn)
+		{
+			IniWarningW(
+				L"Unable to parse %ls expression for \"%ls\": \"%ls\"\n"
+				L" - [%ls] @ [%ls]\n",
+				IniValueTypeName<T>::value, key, value.c_str(),
+				section, ini_namespace.c_str());
+		}
+		return false;
+	}
+
+	float expression_value;
+
+	if (!expression.static_evaluate(&expression_value, nullptr, true))
+	{
+		if (warn)
+		{
+			IniWarningW(
+				L"%ls expression for \"%ls\" cannot be statically evaluated: \"%ls\"\n"
+				L" - [%ls] @ [%ls]\n",
+				IniValueTypeName<T>::value, key, value.c_str(),
+				section, ini_namespace.c_str());
+		}
+		return false;
+	}
+
+	if (!convert(expression_value, out))
+	{
+		if (warn)
+		{
+			IniWarningW(
+				L"Expression result \"%f\" for \"%ls\" %ls conversion is invalid: \"%ls\"\n"
+				L" - [%ls] @ [%ls]\n",
+				expression_value, key, IniValueTypeName<T>::value, value.c_str(),
+				section, ini_namespace.c_str());
+		}
+		return false;
+	}
+
+	return true;
+}
+
+inline void SetFound(bool* found, bool value) noexcept
+{
+	if (found)
+		*found = value;
+}
+
+template<typename T, typename Parser, typename Logger>
+T GetIniValue(
+	const wchar_t* section,
+	const wchar_t* key,
+	T def,
+	bool* found,
+	bool warn,
+	Parser&& parser,
+	Logger&& logger)
+{
+	SetFound(found, false);
+
+	const wstring* val = GetIniWstring(section, key);
+	if (!val)
+		return def;
+
+	if (val->empty())
+	{
+		if (warn)
+		{
+			IniWarningW(
+				L"Unable to parse %ls value for \"%ls\" from empty string\n"
+				L" - [%ls] @ [%ls]\n",
+				IniValueTypeName<T>::value, key,
+				section, GetIniSectionNamespace(section).c_str());
+		}
+		return def;
+	}
+
+	T result{};
+	if (!parser(section, key, *val, result, warn, nullptr))
+		return def;
+
+	SetFound(found, true);
+
+	logger(key, result);
+
+	return result;
+}
+
+inline bool ConvertExpressionToFloat(float expr, float& out) noexcept
+{
+	// Preserve the evaluated IEEE-754 value, including NaN and ±infinity.
+	out = expr;
+	return true;
+}
+
+bool ParseFloatValue(const wchar_t* section, const wchar_t* key, const wstring& val, float& out, bool warn = true, const wstring* ini_namespace_override = nullptr)
+{
+	wchar_t* end = nullptr;
+	errno = 0;
+	out = std::wcstof(val.c_str(), &end); // TODO: C++17: use std::from_chars.
+	
+	if (*end == L'\0')
+	{
+		if (errno == ERANGE)
+		{
+			// Treat floating-point overflow as ±infinity.
+			out = std::signbit(out) ? -std::numeric_limits<float>::infinity() : std::numeric_limits<float>::infinity();
+		}
+		return true;
+	}
+
+	return ParseIniExpression(ini_namespace_override, section, key, val, out, warn, ConvertExpressionToFloat);
+}
+
+inline void LogIniFloat(const wchar_t* key, float value)
+{
+	LogInfoW(L"  %ls=%f\n", key, value);
+}
+
+float GetIniFloat(const wchar_t* section, const wchar_t* key, float def, bool* found)
+{
+	return GetIniValue(section, key, def, found, true, ParseFloatValue, LogIniFloat);
+}
+
+inline bool ConvertExpressionToInt(float expr, int& out) noexcept
+{
+	// Saturate infinities and out-of-range values. Map NaN to zero.
+	if (std::isnan(expr))
+		out = 0;
+	else if (expr <= static_cast<float>(INT_MIN))
+		out = INT_MIN;
+	else if (expr >= static_cast<float>(INT_MAX))
+		out = INT_MAX;
+	else
+		out = static_cast<int>(expr);
+
+	return true;
+}
+
+bool ParseIntValue(const wchar_t* section, const wchar_t* key, const wstring& val, int& out, bool warn = false, const wstring* ini_namespace_override = nullptr)
+{
+	wchar_t* end = nullptr;
+	errno = 0;
+	long long n = std::wcstoll(val.c_str(), &end, 10); // TODO: C++17: use std::from_chars
+	
+	if (*end == L'\0') {
+		if (errno == ERANGE)
+		{
+			// Saturate integer literal overflow.
+			out = (n < 0) ? INT_MIN : INT_MAX;
+		}
+		else
+		{
+			if (n < INT_MIN)
+				out = INT_MIN;
+			else if (n > INT_MAX)
+				out = INT_MAX;
+			else
+				out = static_cast<int>(n);
+		}
+		return true;
+	}
+
+	return ParseIniExpression(ini_namespace_override, section, key, val, out, warn, ConvertExpressionToInt);
+}
+
+inline void LogIniInt(const wchar_t* key, int value)
+{
+	LogInfoW(L"  %ls=%d\n", key, value);
+}
+
+int GetIniInt(const wchar_t* section, const wchar_t* key, int def, bool* found, bool warn)
+{
+	return GetIniValue<int>(section, key, def, found, warn, ParseIntValue, LogIniInt);
+}
+
+inline bool ConvertExpressionToBool(float expr, bool& out) noexcept
+{
+	// NaN is false; all other non-zero values (including ±infinity) are true.
+	out = !std::isnan(expr) && expr != 0.0f;
+	return true;
+}
+
+bool ParseBoolValue(const wchar_t* section, const wchar_t* key, const wstring& val, bool& out, bool warn = false, const wstring* ini_namespace_override = nullptr)
+{
+	wstring normalized = NormalizeString(val);
+
+	if (normalized == L"1" || normalized == L"true" || normalized == L"yes" || normalized == L"on")
+	{
+		out = true;
+		return true;
+	}
+
+	if (normalized == L"0" || normalized == L"false" || normalized == L"no" || normalized == L"off")
+	{
+		out = false;
+		return true;
+	}
+
+	return ParseIniExpression(ini_namespace_override, section, key, normalized, out, warn, ConvertExpressionToBool, false);
+}
+
+inline void LogIniBool(const wchar_t* key, bool value)
+{
+	LogInfoW(L"  %ls=%d\n", key, value ? 1 : 0);
+}
+
+bool GetIniBool(const wchar_t* section, const wchar_t* key, bool def, bool* found, bool warn)
+{
+	return GetIniValue<bool>(section, key, def, found, warn, ParseBoolValue, LogIniBool);
 }
 
 static UINT64 GetIniHash(const wchar_t *section, const wchar_t *key, UINT64 def, bool *found)
@@ -1269,14 +1475,15 @@ static int GetIniBoolIntOrEnum(const wchar_t *section, const wchar_t *key, int d
 	int ret;
 	bool tmp_found;
 
-	ret = GetIniBoolOrInt(section, key, def, &tmp_found);
+	ret = GetIniEnum(section, key, def, &tmp_found, prefix, names, names_len, first);
+
 	if (tmp_found && ret >= 0 && ret < names_len) {
 		if (found)
 			*found = tmp_found;
 		return ret;
 	}
 
-	return GetIniEnum(section, key, def, found, prefix, names, names_len, first);
+	return GetIniBoolOrInt(section, key, def, found);
 }
 
 static void GetUserConfigPath(const wchar_t *migoto_path)
@@ -1779,94 +1986,172 @@ static void ParseResourceInitialData(CustomResource *custom_resource, const wcha
 	}
 }
 
+static CustomResource* ParseResourceSection(const wchar_t* section_name, const wchar_t* resource_id_suffix)
+{
+	wchar_t setting[MAX_PATH];
+
+	wstring resource_id(section_name);
+	if (resource_id_suffix != nullptr) {
+		resource_id += L"_";
+		resource_id += resource_id_suffix;
+	}
+
+	// Convert section name to lower case so our keys will be consistent in the unordered_map:
+	std::transform(resource_id.begin(), resource_id.end(), resource_id.begin(), ::towlower);
+
+	// Empty Resource sections are valid (think of them as a
+	// sort of variable declaration), so explicitly construct a
+	// CustomResource for each one. Use the [] operator so the
+	// default constructor will be used:
+	CustomResource* custom_resource = &customResources[resource_id];
+	custom_resource->name = resource_id;
+	custom_resource->pool_index = -2;
+
+	custom_resource->max_copies_per_frame = GetIniInt(section_name, L"max_copies_per_frame", 0, NULL);
+
+	if (GetIniStringAndLog(section_name, L"filename", 0, setting, MAX_PATH)) {
+		// If this section was not in the main d3dx.ini, look
+		// for a file relative to the config it came from
+		// first, then try relative to the 3DMigoto directory:
+		wstring namespace_path;
+		get_namespaced_section_path(section_name, &namespace_path);
+		bool found = false;
+		wchar_t path[MAX_PATH];
+		if (!namespace_path.empty()) {
+			GetModuleFileName(migoto_handle, path, MAX_PATH);
+			wcsrchr(path, L'\\')[1] = 0;
+			wcscat(path, namespace_path.c_str());
+			wcscat(path, setting);
+			if (GetFileAttributes(path) != INVALID_FILE_ATTRIBUTES)
+				found = true;
+		}
+		if (!found) {
+			GetModuleFileName(migoto_handle, path, MAX_PATH);
+			wcsrchr(path, L'\\')[1] = 0;
+			wcscat(path, setting);
+		}
+		custom_resource->filename = path;
+	}
+
+	custom_resource->override_type = GetIniEnumClass(section_name, L"type", CustomResourceType::INVALID, NULL, CustomResourceTypeNames);
+
+	if (GetIniString(section_name, L"format", 0, setting, MAX_PATH)) {
+		custom_resource->override_format = ParseFormatString(setting, true);
+		if (custom_resource->override_format == (DXGI_FORMAT)-1) {
+			IniWarningW(L"Unknown format \"%ls\"\n - [%ls]\n", setting, section_name);
+		} else {
+			LogInfo("  format=%s\n", TexFormatStr(custom_resource->override_format));
+		}
+	}
+
+	custom_resource->override_width = GetIniInt(section_name, L"width", -1, NULL);
+	custom_resource->override_height = GetIniInt(section_name, L"height", -1, NULL);
+	custom_resource->override_depth = GetIniInt(section_name, L"depth", -1, NULL);
+	custom_resource->override_mips = GetIniInt(section_name, L"mips", -1, NULL);
+	custom_resource->override_array = GetIniInt(section_name, L"array", -1, NULL);
+	custom_resource->override_msaa = GetIniInt(section_name, L"msaa", -1, NULL);
+	custom_resource->override_msaa_quality = GetIniInt(section_name, L"msaa_quality", -1, NULL);
+	custom_resource->override_byte_width = GetIniInt(section_name, L"byte_width", -1, NULL);
+	custom_resource->override_stride = GetIniInt(section_name, L"stride", -1, NULL);
+
+	custom_resource->width_multiply = GetIniFloat(section_name, L"width_multiply", 1.0f, NULL);
+	custom_resource->height_multiply = GetIniFloat(section_name, L"height_multiply", 1.0f, NULL);
+
+	if (GetIniStringAndLog(section_name, L"bind_flags", 0, setting, MAX_PATH)) {
+		custom_resource->override_bind_flags = parse_enum_option_string<const wchar_t*, CustomResourceBindFlags, wchar_t*>
+			(CustomResourceBindFlagNames, setting, NULL);
+	}
+
+	if (GetIniStringAndLog(section_name, L"misc_flags", 0, setting, MAX_PATH)) {
+		custom_resource->override_misc_flags = parse_enum_option_string<const wchar_t*, ResourceMiscFlags, wchar_t*>
+			(ResourceMiscFlagNames, setting, NULL);
+	}
+
+	ParseResourceInitialData(custom_resource, section_name);
+
+	return custom_resource;
+}
+
+static CustomResourcePool* ParseResourcePoolSection(const wchar_t* section_name)
+{
+	int pool_size = GetIniInt(section_name, L"pool_size", 1, NULL);
+
+	if (pool_size < 1)
+		return nullptr;
+
+	wstring pool_id = section_name;
+	std::transform(pool_id.begin(), pool_id.end(), pool_id.begin(), ::towlower);
+
+	CustomResourcePool* pool = &customResourcePools[pool_id];
+
+	pool->name = pool_id;
+
+	pool->index_type = GetIniEnumClass(section_name, L"pool_index_type", PoolIndexType::RING, NULL, PoolIndexTypeNames);
+	pool->lazy_initialization = GetIniBool(section_name, L"pool_lazy_initialization", true, NULL);
+	pool->element_type_switch_reset = GetIniBool(section_name, L"pool_element_type_switch_reset", true, NULL);
+	pool->allocate_slot_on_missing = GetIniBool(section_name, L"pool_allocate_slot_on_missing", false, NULL);
+	
+	int expiration_timeout_frames = GetIniInt(section_name, L"pool_expiration_timeout_frames", -1, NULL);
+	if (expiration_timeout_frames >= 0)
+		pool->expiration_timeout_frames = (unsigned)expiration_timeout_frames;
+	pool->reset_expired_elements = GetIniBool(section_name, L"pool_expiration_reset_elements", true, NULL);
+	pool->read_refreshes_expiration = GetIniBool(section_name, L"pool_expiration_refresh_on_read", false, NULL);
+	
+	int spatial_radius = GetIniInt(section_name, L"pool_spatial_radius", 1, NULL);
+	if (spatial_radius < 1) {
+		IniWarningW(L"Specified spatial radius \"%d\" is below minimum \"1\".\n - [%ls]\n", spatial_radius, pool->name.c_str());
+		spatial_radius = 1;
+	}
+	pool->spatial_radius = spatial_radius;
+
+	pool->resource_template = ParseResourceSection(section_name, L"template");
+
+	pool->resource_template->pool = pool;
+	pool->resource_template->pool_index = -1;
+
+	bool persist_variables = GetIniBool(section_name, L"pool_persist_variables", false, NULL);
+	if (persist_variables && pool->index_type != PoolIndexType::RING) {
+		persist_variables = false;
+		IniWarningW(L"Pool variables persistence is not supported for \"%ls\" index type (\"ring\" index only feature).\n - [%ls]\n",
+			lookup_enum_name(PoolIndexTypeNames, pool->index_type), pool->name.c_str());
+	}
+
+	pool->variable_template = std::make_unique<CommandListVariable> (
+		pool_id + L"_template",
+		GetIniFloat(section_name, L"pool_variable_default_value", 0, NULL),
+		persist_variables ? VariableFlags::PERSIST : VariableFlags::NONE
+	);
+
+	pool->Initialize(pool_size);
+
+	return pool;
+}
+
 static void ParseResourceSections()
 {
-	IniSections::iterator lower, upper, i;
-	wstring resource_id;
-	CustomResource *custom_resource;
-	wchar_t setting[MAX_PATH], path[MAX_PATH];
-	wstring namespace_path;
-	bool found;
-
+	customResourcePools.clear();
 	customResources.clear();
+
+	IniSections::iterator lower = ini_sections.lower_bound(wstring(L"Pool"));
+	IniSections::iterator upper = prefix_upper_bound(ini_sections, wstring(L"Pool"));
+
+	for (IniSections::iterator i = lower; i != upper; i++) {
+		wstring section_name = i->first;
+
+		LogInfoW(L"[%s]\n", section_name.c_str());
+
+		ParseResourcePoolSection(section_name.c_str());
+	}
 
 	lower = ini_sections.lower_bound(wstring(L"Resource"));
 	upper = prefix_upper_bound(ini_sections, wstring(L"Resource"));
-	for (i = lower; i != upper; i++) {
-		LogInfoW(L"[%s]\n", i->first.c_str());
 
-		// Convert section name to lower case so our keys will be
-		// consistent in the unordered_map:
-		resource_id = i->first;
-		std::transform(resource_id.begin(), resource_id.end(), resource_id.begin(), ::towlower);
+	for (IniSections::iterator i = lower; i != upper; i++) {
+		wstring section_name = i->first;
 
-		// Empty Resource sections are valid (think of them as a
-		// sort of variable declaration), so explicitly construct a
-		// CustomResource for each one. Use the [] operator so the
-		// default constructor will be used:
-		custom_resource = &customResources[resource_id];
-		custom_resource->name = i->first;
+		LogInfoW(L"[%s]\n", section_name.c_str());
 
-		custom_resource->max_copies_per_frame =
-			GetIniInt(i->first.c_str(), L"max_copies_per_frame", 0, NULL);
-
-		if (GetIniStringAndLog(i->first.c_str(), L"filename", 0, setting, MAX_PATH)) {
-			// If this section was not in the main d3dx.ini, look
-			// for a file relative to the config it came from
-			// first, then try relative to the 3DMigoto directory:
-			get_namespaced_section_path(i->first.c_str(), &namespace_path);
-			found = false;
-			if (!namespace_path.empty()) {
-				GetModuleFileName(migoto_handle, path, MAX_PATH);
-				wcsrchr(path, L'\\')[1] = 0;
-				wcscat(path, namespace_path.c_str());
-				wcscat(path, setting);
-				if (GetFileAttributes(path) != INVALID_FILE_ATTRIBUTES)
-					found = true;
-			}
-			if (!found) {
-				GetModuleFileName(migoto_handle, path, MAX_PATH);
-				wcsrchr(path, L'\\')[1] = 0;
-				wcscat(path, setting);
-			}
-			custom_resource->filename = path;
-		}
-
-		custom_resource->override_type = GetIniEnumClass(i->first.c_str(), L"type", CustomResourceType::INVALID, NULL, CustomResourceTypeNames);
-
-		if (GetIniString(i->first.c_str(), L"format", 0, setting, MAX_PATH)) {
-			custom_resource->override_format = ParseFormatString(setting, true);
-			if (custom_resource->override_format == (DXGI_FORMAT)-1) {
-				IniWarningW(L"Unknown format \"%ls\"\n - [%ls]\n", setting, i->first.c_str());
-			} else {
-				LogInfo("  format=%s\n", TexFormatStr(custom_resource->override_format));
-			}
-		}
-
-		custom_resource->override_width = GetIniInt(i->first.c_str(), L"width", -1, NULL);
-		custom_resource->override_height = GetIniInt(i->first.c_str(), L"height", -1, NULL);
-		custom_resource->override_depth = GetIniInt(i->first.c_str(), L"depth", -1, NULL);
-		custom_resource->override_mips = GetIniInt(i->first.c_str(), L"mips", -1, NULL);
-		custom_resource->override_array = GetIniInt(i->first.c_str(), L"array", -1, NULL);
-		custom_resource->override_msaa = GetIniInt(i->first.c_str(), L"msaa", -1, NULL);
-		custom_resource->override_msaa_quality = GetIniInt(i->first.c_str(), L"msaa_quality", -1, NULL);
-		custom_resource->override_byte_width = GetIniInt(i->first.c_str(), L"byte_width", -1, NULL);
-		custom_resource->override_stride = GetIniInt(i->first.c_str(), L"stride", -1, NULL);
-
-		custom_resource->width_multiply = GetIniFloat(i->first.c_str(), L"width_multiply", 1.0f, NULL);
-		custom_resource->height_multiply = GetIniFloat(i->first.c_str(), L"height_multiply", 1.0f, NULL);
-
-		if (GetIniStringAndLog(i->first.c_str(), L"bind_flags", 0, setting, MAX_PATH)) {
-			custom_resource->override_bind_flags = parse_enum_option_string<const wchar_t *, CustomResourceBindFlags, wchar_t*>
-				(CustomResourceBindFlagNames, setting, NULL);
-		}
-
-		if (GetIniStringAndLog(i->first.c_str(), L"misc_flags", 0, setting, MAX_PATH)) {
-			custom_resource->override_misc_flags = parse_enum_option_string<const wchar_t *, ResourceMiscFlags, wchar_t*>
-				(ResourceMiscFlagNames, setting, NULL);
-		}
-
-		ParseResourceInitialData(custom_resource, i->first.c_str());
+		ParseResourceSection(section_name.c_str(), nullptr);
 	}
 }
 
@@ -1887,7 +2172,7 @@ static bool ParseCommandListLine(const wchar_t *ini_section,
 	if (ParseCommandListVariableAssignment(ini_section, lhs, rhs, raw_line, command_list, pre_command_list, post_command_list, ini_namespace))
 		return true;
 
-	if (ParseCommandListResourceCopyDirective(ini_section, lhs, rhs, command_list, ini_namespace))
+	if (ParseCommandListResourceCopyTargetDirective(ini_section, lhs, rhs, command_list, ini_namespace))
 		return true;
 
 	if (raw_line && !explicit_command_list &&
@@ -2043,6 +2328,24 @@ static void ParseCommandList(const wchar_t *id,
 		post_command_list->scope = NULL;
 }
 
+CommandListVariable* RegisterGlobalVariable(wstring& name, float* fval, VariableFlags flags)
+{
+	std::pair<CommandListVariables::iterator, bool> inserted = command_list_globals.emplace(name, CommandListVariable{ name, *fval, flags });
+	if (!inserted.second) {
+		return nullptr;
+	}
+
+	if (flags & VariableFlags::PERSIST)
+		persistent_variables.emplace_back(&inserted.first->second);
+
+	if (!fval)
+		LogInfo("  global %S\n", name.c_str());
+	else
+		LogInfo("  global %S=%f\n", name.c_str(), *fval);
+
+	return &inserted.first->second;
+}
+
 static void ParseConstantsSection()
 {
 	VariableFlags flags;
@@ -2051,9 +2354,6 @@ static void ParseConstantsSection()
 	wstring *key, *val, name;
 	const wchar_t *name_pos;
 	const wstring *ini_namespace;
-	std::pair<CommandListVariables::iterator, bool> inserted;
-	float fval;
-	int len;
 
 	// The naming on this one is historical - [Constants] used to define
 	// iniParams that couldn't change, then later we allowed them to be
@@ -2104,47 +2404,31 @@ static void ParseConstantsSection()
 		name = name_pos;
 
 		if (!valid_variable_name(name)) {
-			IniWarningW(L"Illegal global variable name: \"%ls\"\n - [Constants] @ [%ls]\n", name.c_str(), entry->ini_namespace.c_str());
+			IniWarningW(L"Illegal global variable name: \"%ls\"\n - [Constants] @ [%ls]\n", name.c_str(), ini_namespace->c_str());
 			continue;
 		}
 
 		if (!ini_namespace->empty())
 			name = get_namespaced_var_name_lower(name, ini_namespace);
 
-		// Initialisation is optional and deferred until the command
-		// list is run
-		// If the initialiser is present and simple
-		fval = 0.0f;
-		if (!val->empty()) {
-			if (swscanf_s(val->c_str(), L"%f%n", &fval, &len) != 1 || len != val->length()) {
-				IniWarningW(L"Floating point parse error: %ls=%ls\n - [Constants] @ [%ls]\n", key->c_str(), val->c_str(), entry->ini_namespace.c_str());
+		// Initialisation is optional and deferred until the command list is run.
+		// If the initialiser is present and simple.
+		float fval = 0.0f;
+		if (!val->empty())
+		{
+			if (!ParseFloatValue(L"Constants", key->c_str(), *val, fval, true, ini_namespace))
 				continue;
-			}
 		}
 
-		inserted = command_list_globals.emplace(name, CommandListVariable{name, fval, flags});
-		if (!inserted.second) {
-			IniWarningW(L"Redeclaration of %ls\n - [Constants] @ [%ls]\n", name.c_str(), entry->ini_namespace.c_str());
+		if (!RegisterGlobalVariable(name, &fval, flags)) {
+			IniWarningW(L"Redeclaration of %ls\n - [Constants] @ [%ls]\n", name.c_str(), ini_namespace->c_str());
 			continue;
 		}
-
-		if (flags & VariableFlags::PERSIST)
-			persistent_variables.emplace_back(&inserted.first->second);
-
-		if (val->empty())
-			LogInfo("  global %S\n", name.c_str());
-		else
-			LogInfo("  global %S=%f\n", name.c_str(), fval);
 
 		// Remove this line from the ini section data structures so the
 		// command list won't consider it in the 2nd pass:
 		next = section->erase(entry);
 	}
-
-	// Second pass for the command list:
-	G->constants_command_list.clear();
-	G->post_constants_command_list.clear();
-	ParseCommandList(L"Constants", &G->constants_command_list, &G->post_constants_command_list, NULL);
 }
 
 static wchar_t *true_false_overrule[] = {
@@ -2817,42 +3101,6 @@ static void parse_fuzzy_numeric_match_expression(const wchar_t *setting, FuzzyMa
 		return parse_fuzzy_numeric_match_expression_error(ptr);
 }
 
-float GetConstantIniVariable(const wchar_t* section, const wchar_t* key, float def, bool* found)
-{
-	std::string tmp;
-	std::wstring var_name;
-	float ret = def;
-
-	if (found)
-		*found = false;
-
-	if (GetIniString(section, key, NULL, &tmp)) {
-
-		var_name = wstring(tmp.begin(), tmp.end());
-		wstring ini_namespace = ini_sections[section].ini_namespace;
-		CommandListVariables::iterator var = command_list_globals.end();
-
-		var = command_list_globals.find(get_namespaced_var_name_lower(var_name, &ini_namespace));
-
-		if (var != command_list_globals.end()) {
-			if (found)
-				*found = true;
-			ret = var->second.fval;
-		}
-		else {
-			ret = GetIniFloat(section, key, def, found);
-			if (found) {
-				if (ret != def)
-					*found = true;
-				else
-					IniWarningW(L"Constant variable %S is not defined!\n - [%ls] @ [%ls]\n", tmp.c_str(), section, ini_namespace.c_str());
-			}
-		}
-	}
-
-	return ret;
-}
-
 static void parse_texture_override_common(const wchar_t *id, TextureOverride *override, bool register_command_lists)
 {
 	wchar_t setting[MAX_PATH];
@@ -2874,7 +3122,7 @@ static void parse_texture_override_common(const wchar_t *id, TextureOverride *ov
 	if (G->allow_buffer_resize) 
 	{
 		// Handle buffer resize aka vertex limit raise feature.
-		int override_vertex_count = (int)GetConstantIniVariable(id, L"override_vertex_count", -1.0f, &found);
+		int override_vertex_count = GetIniInt(id, L"override_vertex_count", -1.0f, &found);
 		if (override_vertex_count > 0) {
 			// Ensure that stride is specified.
 			int override_byte_stride = GetIniInt(id, L"override_byte_stride", -1, NULL);
@@ -2886,7 +3134,7 @@ static void parse_texture_override_common(const wchar_t *id, TextureOverride *ov
 			override->override_byte_width = override_byte_stride * override_vertex_count;
 
 			// Handle UAV resize
-			int uav_byte_stride = (int)GetConstantIniVariable(id, L"uav_byte_stride", -1.0f, &found);
+			int uav_byte_stride = GetIniInt(id, L"uav_byte_stride", -1.0f, &found);
 			if (uav_byte_stride > 0) {
 				// Use StructureByteStride override (useful when actual buffer stride is different from the one declared by a game)
 				override->override_num_elements = override_vertex_count * override_byte_stride / uav_byte_stride;
@@ -4452,6 +4700,9 @@ void LoadConfigFile()
 	if (GetIniStringAndLog(L"Rendering", L"fix_MatrixOperand1Multiplier", 0, setting, MAX_PATH))
 		G->decompiler_settings.MatrixPos_MUL1 = readStringParameter(setting);
 
+	if (GetIniString(L"System", L"additional_foreground_window", nullptr, setting, MAX_PATH))
+		G->additionalForegroundWindowTitle = setting;
+
 	// [Hunting]
 	ParseHuntingSection();
 
@@ -4478,13 +4729,18 @@ void LoadConfigFile()
 	// [Preset]s may refer to:
 	EnumeratePresetOverrideSections();
 
-	// Must be done before any command lists that may refer to them:
-	ParseResourceSections();
-
 	// This is the only command list we permit to allocate global variables,
 	// so we parse it before all other command lists, key bindings and
 	// presets that may use those variables.
 	ParseConstantsSection();
+
+	// Must be done before any command lists that may refer to them:
+	ParseResourceSections();
+
+	// Second pass for the Constants command list:
+	G->constants_command_list.clear();
+	G->post_constants_command_list.clear();
+	ParseCommandList(L"Constants", &G->constants_command_list, &G->post_constants_command_list, NULL);
 
 	// Must be done after [Constants] has allocated global variables:
 	RegisterPresetKeyBindings();
