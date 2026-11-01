@@ -5,6 +5,7 @@
 #include <fcntl.h>
 #include <Dbghelp.h>
 #include <shellscalingapi.h>
+#include <chrono>
 
 // FIXME: Move any dependencies from these headers into common:
 #if MIGOTO_DX == 9
@@ -70,8 +71,8 @@ BOOL CreateDirectoryEnsuringAccess(LPCWSTR path)
 	return ret;
 }
 
-// Replacement for _wfopen_s that ensures the permissions will be set so we can
-// read it back later.
+// Replacement for _wfopen_s that creates the file with our required security
+// attributes. Supports write ("w") and append ("a") modes.
 errno_t wfopen_ensuring_access(FILE** pFile, const wchar_t *filename, const wchar_t *mode)
 {
 	SECURITY_ATTRIBUTES sa, *psa = NULL;
@@ -79,28 +80,33 @@ errno_t wfopen_ensuring_access(FILE** pFile, const wchar_t *filename, const wcha
 	int fd = -1;
 	FILE *fp = NULL;
 	int osf_flags = 0;
+	DWORD creation_disposition;
 
 	*pFile = NULL;
 
-	if (wcsstr(mode, L"w") == NULL) {
-		// This function is for creating new files for now. We could
-		// make it do some heroics on read/append as well, but I don't
-		// want to push this further than we need to.
-		LogInfo("FIXME: wfopen_ensuring_access only supports opening for write\n");
+	if (wcsstr(mode, L"w") != NULL) {
+		creation_disposition = CREATE_ALWAYS;
+	}
+	else if (wcsstr(mode, L"a") != NULL) {
+		creation_disposition = OPEN_ALWAYS;
+	}
+	else {
+		LogWarning("FIXME: wfopen_ensuring_access only supports opening for write/append\n");
 		DoubleBeepExit();
 	}
 
 	if (wcsstr(mode, L"b") == NULL)
 		osf_flags |= _O_TEXT;
 
-	// We use _wfopen_s so that we can use formatted print routines, but to
-	// set security attributes at creation time to make sure the
-	// permissions give us read access we need to use CreateFile, and
-	// convert the resulting handle into a C file descriptor, then a FILE*
-	// that can be used as per usual.
 	psa = init_security_attributes(&sa);
-	fh = CreateFile(filename, GENERIC_WRITE, 0, psa, CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+
+	// CreateFile is used instead of _wfopen_s so we can supply our security
+	// attributes when creating the file. Convert the resulting HANDLE to a
+	// CRT file descriptor and then to a FILE* for normal stdio operations.
+	fh = CreateFile(filename, GENERIC_WRITE, 0, psa, creation_disposition, FILE_ATTRIBUTE_NORMAL, NULL);
+
 	LocalFree(sa.lpSecurityDescriptor);
+
 	if (fh == INVALID_HANDLE_VALUE) {
 		// FIXME: Map GetLastError() to appropriate errno
 		return EIO;
@@ -111,6 +117,13 @@ errno_t wfopen_ensuring_access(FILE** pFile, const wchar_t *filename, const wcha
 	if (fd == -1) {
 		CloseHandle(fh);
 		return EIO;
+	}
+
+	if (wcsstr(mode, L"a") != NULL) {
+		if (_lseeki64(fd, 0, SEEK_END) == -1) {
+			_close(fd);
+			return EIO;
+		}
 	}
 
 	// From this point on, we do not use CloseHandle(fh), as it will be
@@ -766,11 +779,49 @@ float random(float max)
 
 	uint32_t seed = G->frame_no;
 	seed += 0x9e3779b9 * random_call_counter++;
-	seed ^= G->gSystemTickCount;
+	seed ^= static_cast<uint32_t>(G->gSystemTickCount);
 
 	uint32_t value = hash32(seed);
 
 	float normalized = (value & 0x00ffffff) / 16777216.0f;
 
 	return normalized * max * sign;
+}
+
+uint64_t GetSystemTicks()
+{
+	return std::chrono::duration_cast<std::chrono::microseconds>(
+		std::chrono::steady_clock::now().time_since_epoch()
+	).count();
+}
+
+void FPSCounter::Update(uint64_t system_tick_count)
+{
+	if (!m_initialized)
+	{
+		m_last_tick = system_tick_count;
+		m_initialized = true;
+		return;
+	}
+
+	const uint64_t delta = system_tick_count - m_last_tick;
+	m_last_tick = system_tick_count;
+
+	// Ignore zero frame times and long pauses.
+	if (delta == 0 || delta > m_max_delta)
+		return;
+
+	const float frame_time = delta / 1'000'000.0f;
+
+	if (m_average_frame_time == 0.0f)
+		m_average_frame_time = frame_time;
+	else
+		m_average_frame_time += (frame_time - m_average_frame_time) * m_smoothing;
+
+	m_fps = static_cast<float>(1.0f / m_average_frame_time);
+}
+
+float FPSCounter::GetFPS() const
+{
+	return m_fps;
 }
